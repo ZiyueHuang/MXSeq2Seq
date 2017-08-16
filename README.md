@@ -4,7 +4,7 @@
 python seq2seq.py
 ```
 
-##Acknowledgement
+## Acknowledgement
 
 Effective Approaches to Attention-based Neural Machine Translation
 
