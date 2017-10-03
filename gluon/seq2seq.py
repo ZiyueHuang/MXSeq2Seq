@@ -33,6 +33,9 @@ parser.add_argument('--cuda', action='store_true', default=False,
                     help='train on GPU with CUDA')
 parser.add_argument('--log-interval', type=int, default=5000, metavar='N',
                     help='how many iterations to wait before logging training status')
+parser.add_argument('--test', action='store_true', default=False,
+                    help='test layer by layer')
+
 opt = parser.parse_args()
 
 
@@ -137,9 +140,9 @@ def prepareData(lang1, lang2, max_length, reverse=False):
     return input_lang, output_lang, pairs
 
 
-
-input_lang, output_lang, pairs = prepareData('eng', 'fra', opt.max_length, True)
-print random.choice(pairs)
+if not opt.test:
+    input_lang, output_lang, pairs = prepareData('eng', 'fra', opt.max_length, True)
+    print random.choice(pairs)
 
 
 def indexesFromSentence(lang, sentence):
@@ -149,7 +152,7 @@ def indexesFromSentence(lang, sentence):
 def variableFromSentence(lang, sentence):
     indexes = indexesFromSentence(lang, sentence)
     indexes.append(EOS_token)
-    result = F.array(indexes)    
+    result = F.array(indexes)
     return result
 
 
@@ -183,7 +186,7 @@ class AttnDecoderRNN(Block):
         embedded = self.embedding(input)
         if self.dropout_p > 0:
             embedded = self.dropout(embedded)
-        
+
         attn_weights = F.softmax(
             self.attn(F.concat(embedded, hidden[0].flatten(), dim=1)))
         attn_applied = F.batch_dot(attn_weights.expand_dims(0),
@@ -218,7 +221,7 @@ class EncoderRNN(Block):
         ##input shape, (seq,)
         output = self.embedding(input).swapaxes(0, 1)
         for i in range(self.n_layers):
-            output, hidden = self.gru(output, hidden)        
+            output, hidden = self.gru(output, hidden)
         return output, hidden
 
     def initHidden(self, ctx):
@@ -241,7 +244,7 @@ def train(input_variable, target_variable, encoder, decoder, teacher_forcing_rat
                 input_variable.expand_dims(0), encoder_hidden)
 
         if input_length < max_length:
-            encoder_outputs = F.concat(encoder_outputs.flatten(), 
+            encoder_outputs = F.concat(encoder_outputs.flatten(),
                 F.zeros((max_length - input_length, encoder.hidden_size), ctx=ctx), dim=0)
         else:
             encoder_outputs = encoder_outputs.flatten()
@@ -261,7 +264,7 @@ def train(input_variable, target_variable, encoder, decoder, teacher_forcing_rat
                     decoder_input, decoder_hidden, encoder_outputs)
 
                 loss = F.add(loss, criterion(decoder_output, target_variable[di]))
-
+                print criterion(decoder_output, target_variable[di])
                 decoder_input = target_variable[di]  # Teacher forcing
 
         else:
@@ -270,11 +273,11 @@ def train(input_variable, target_variable, encoder, decoder, teacher_forcing_rat
                 decoder_output, decoder_hidden, decoder_attention = decoder(
                     decoder_input, decoder_hidden, encoder_outputs)
                 topi = decoder_output.argmax(axis=1)
-    
+
                 decoder_input = topi
-    
+
                 loss = F.add(loss, criterion(decoder_output, target_variable[di]))
-                
+
                 if topi.asscalar() == EOS_token:
                     break
 
@@ -298,7 +301,7 @@ def trainIters(encoder, decoder, ctx, opt):
 
     encoder_optimizer = gluon.Trainer(encoder.collect_params(), 'sgd', {'learning_rate': opt.lr})
     decoder_optimizer = gluon.Trainer(decoder.collect_params(), 'sgd', {'learning_rate': opt.lr})
-    
+
     training_pairs = [variablesFromPair(random.choice(pairs))
                       for i in range(opt.num_iters)]
 
@@ -311,7 +314,7 @@ def trainIters(encoder, decoder, ctx, opt):
 
         loss = train(input_variable, target_variable, encoder, decoder, opt.teacher_forcing_ratio,
                      encoder_optimizer, decoder_optimizer, criterion, opt.max_length, ctx)
-        
+
         print_loss_total += loss
 
         if iter % print_every == 0:
@@ -320,13 +323,52 @@ def trainIters(encoder, decoder, ctx, opt):
             print print_loss_avg
 
 
-encoder = EncoderRNN(input_lang.n_words, opt.hidden_size, opt.num_layers)
-attn_decoder = AttnDecoderRNN(opt.hidden_size, output_lang.n_words,
-                               opt.num_layers, opt.max_length, dropout_p=0.1)
 
 if opt.cuda:
     ctx = mx.gpu(0)
 else:
     ctx = mx.cpu()
 
-trainIters(encoder, attn_decoder, ctx, opt) 
+if opt.test:
+    encoder = EncoderRNN(5, 10, 1)
+    encoder.initialize()
+
+    for i in encoder.collect_params().values():
+        i.data()[:] = 1.0
+
+    input = F.array([[0]])
+
+    hidden = encoder.initHidden(ctx=mx.cpu())
+
+    o, h = encoder(input, hidden)
+
+    print 'encoder'
+    print '=========='
+    print o.asnumpy()
+    print h[0].asnumpy()
+    print '=========='
+
+    attn_decoder = AttnDecoderRNN(2, 5, 1, 10, 0.1)
+    attn_decoder.initialize()
+
+    for i in attn_decoder.collect_params().values():
+        i.data()[:] = 1.0
+
+    input = F.array([0])
+    hidden = attn_decoder.initHidden(ctx=mx.cpu())
+
+    o, h, a = attn_decoder(input, hidden, 0.5*F.ones((10, 2)))
+
+    print 'attn_decoder'
+    print '=========='
+    print o.asnumpy()
+    print h[0].asnumpy()
+    print '=========='
+
+    assert False
+
+encoder = EncoderRNN(input_lang.n_words, opt.hidden_size, opt.num_layers)
+attn_decoder = AttnDecoderRNN(opt.hidden_size, output_lang.n_words,
+                               opt.num_layers, opt.max_length, dropout_p=0.1)
+
+trainIters(encoder, attn_decoder, ctx, opt)
