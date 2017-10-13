@@ -274,7 +274,7 @@ def train(input_variable, target_variable, encoder, decoder, teacher_forcing_rat
                     decoder_input, decoder_hidden, encoder_outputs)
                 topi = decoder_output.argmax(axis=1)
 
-                decoder_input = topi
+                decoder_input = F.array([topi.asscalar()], ctx=ctx)
 
                 loss = F.add(loss, criterion(decoder_output, target_variable[di]))
 
